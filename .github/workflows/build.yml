@@ -120,21 +120,67 @@ jobs:
               print("CMakePresets.json already up-to-date")
           PYEOF
 
-      # 4. Fix narrowing conversion in aurora/dds_io.cpp:
-      #    On armeabi-v7a size_t is 32-bit but expectedSize is uint64_t (64-bit).
-      #    C++11 list-initialisation rejects narrowing, so we add an explicit cast.
-      #    This patch is idempotent: a second run leaves the file unchanged.
+      # 4. Fix aurora dds_io.cpp: uint64_t -> size_t narrowing (32-bit only).
+      #    On armeabi-v7a size_t=32-bit, uint64_t=64-bit → C++11 list-init rejects it.
       - name: Patch aurora dds_io.cpp narrowing conversion (armeabi-v7a)
         if: matrix.abi == 'armeabi-v7a'
         working-directory: source
         run: |
-          FILE="extern/aurora/lib/gfx/dds_io.cpp"
-          # Replace only the uncast form to avoid double-patching
           sed -i \
             's/ByteBuffer data{expectedSize};/ByteBuffer data{static_cast<size_t>(expectedSize)};/' \
-            "$FILE"
-          echo "Patch result:"
-          grep -n "ByteBuffer data{" "$FILE"
+            extern/aurora/lib/gfx/dds_io.cpp
+          echo "dds_io.cpp patch:"
+          grep -n "ByteBuffer data{" extern/aurora/lib/gfx/dds_io.cpp
+
+      # 5. Fix endian.h: BSWAP64 is only defined for aarch64 in the dolphin headers.
+      #    On armeabi-v7a it is undeclared. Add a fallback using __builtin_bswap64
+      #    which is available on all Clang/GCC targets including 32-bit ARM.
+      - name: Patch endian.h missing BSWAP64 (armeabi-v7a)
+        if: matrix.abi == 'armeabi-v7a'
+        working-directory: source
+        run: |
+          FILE="include/dusk/endian.h"
+          # Only patch if BSWAP64 fallback isn't already present
+          if ! grep -q '__builtin_bswap64' "$FILE"; then
+            python3 - << 'PYEOF'
+          import re
+
+          path = "include/dusk/endian.h"
+          with open(path) as f:
+              content = f.read()
+
+          guard = (
+              "\n"
+              "// armeabi-v7a fallback: BSWAP64 is not defined by dolphin headers on 32-bit ARM\n"
+              "#ifndef BSWAP64\n"
+              "#define BSWAP64(x) __builtin_bswap64(x)\n"
+              "#endif\n"
+          )
+
+          # Insert before the first use of BSWAP64
+          content = re.sub(
+              r'(inline u64 be64\(u64 val\))',
+              guard + r'\1',
+              content,
+              count=1
+          )
+
+          with open(path, 'w') as f:
+              f.write(content)
+
+          print("endian.h patched — BSWAP64 fallback added")
+          PYEOF
+          else
+            echo "endian.h already has BSWAP64 fallback, skipping"
+          fi
+          grep -n -A1 'BSWAP64' include/dusk/endian.h | head -20
+
+      # 6. Fix execute permission on stage-jni-libs.sh.
+      #    actions/checkout does not preserve git file permissions,
+      #    so the script arrives without +x and fails with exit code 126.
+      - name: Restore execute permission on scripts
+        working-directory: source
+        run: chmod +x platforms/android/scripts/*.sh
 
       - name: Install dependencies
         run: |
