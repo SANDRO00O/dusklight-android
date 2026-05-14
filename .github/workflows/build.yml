@@ -36,19 +36,94 @@ jobs:
       ANDROID_NDK_VERSION: "29.0.14206865"
 
     steps:
-      # 1. Checkout this android-shell repo into platforms/android/
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          path: source/platforms/android
-
-      # 2. Checkout the full Dusklight source into source/
-      - uses: actions/checkout@v6
+      # Step 1: Checkout full Dusklight source (has CMakePresets.json + C++ source)
+      - name: Checkout Dusklight source
+        uses: actions/checkout@v6
         with:
           repository: TwilitRealm/dusklight
           fetch-depth: 0
           submodules: recursive
           path: source
+
+      # Step 2: Checkout this android repo, overriding platforms/android/ with our version
+      # (our build.gradle has armeabi-v7a in splits, our stage-jni-libs.sh supports armeabi-v7a)
+      - name: Checkout Android platform (this repo)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: source/platforms/android
+
+      # Step 3: Patch CMakePresets.json — add armeabi-v7a presets that the main repo lacks
+      - name: Patch CMakePresets with armeabi-v7a support
+        working-directory: source
+        run: |
+          python3 - << 'PYEOF'
+          import json, sys
+
+          with open('CMakePresets.json') as f:
+              data = json.load(f)
+
+          cfg_names  = [p['name'] for p in data['configurePresets']]
+          bld_names  = [p['name'] for p in data['buildPresets']]
+          patched    = False
+
+          # ── configure: android-armeabi-v7a (local dev preset) ──────────────
+          if 'android-armeabi-v7a' not in cfg_names:
+              idx = next(i for i, p in enumerate(data['configurePresets'])
+                         if p['name'] == 'android-x86_64')
+              data['configurePresets'].insert(idx + 1, {
+                  "name":        "android-armeabi-v7a",
+                  "displayName": "Android (armeabi-v7a)",
+                  "inherits":    ["android-base"],
+                  "cacheVariables": {"ANDROID_ABI": "armeabi-v7a"}
+              })
+              patched = True
+
+          # ── configure: x-android-ci-armv7 (CI preset) ─────────────────────
+          if 'x-android-ci-armv7' not in cfg_names:
+              idx = next(i for i, p in enumerate(data['configurePresets'])
+                         if p['name'] == 'x-android-ci-arm64')
+              data['configurePresets'].insert(idx + 1, {
+                  "name":       "x-android-ci-armv7",
+                  "binaryDir":  "${sourceDir}/build/android-armv7",
+                  "inherits":   ["x-android-ci"],
+                  "cacheVariables": {
+                      "ANDROID_ABI":       "armeabi-v7a",
+                      "Rust_CARGO_TARGET": "armv7-linux-androideabi"
+                  }
+              })
+              patched = True
+
+          # ── build: android-armeabi-v7a ─────────────────────────────────────
+          if 'android-armeabi-v7a' not in bld_names:
+              idx = next(i for i, p in enumerate(data['buildPresets'])
+                         if p['name'] == 'android-x86_64')
+              data['buildPresets'].insert(idx + 1, {
+                  "name":            "android-armeabi-v7a",
+                  "configurePreset": "android-armeabi-v7a",
+                  "targets":         ["dusklight"]
+              })
+              patched = True
+
+          # ── build: x-android-ci-armv7 ─────────────────────────────────────
+          if 'x-android-ci-armv7' not in bld_names:
+              idx = next(i for i, p in enumerate(data['buildPresets'])
+                         if p['name'] == 'x-android-ci-arm64')
+              data['buildPresets'].insert(idx + 1, {
+                  "name":            "x-android-ci-armv7",
+                  "configurePreset": "x-android-ci-armv7",
+                  "targets":         ["dusklight"]
+              })
+              patched = True
+
+          if patched:
+              with open('CMakePresets.json', 'w') as f:
+                  json.dump(data, f, indent=2)
+                  f.write('\n')
+              print("CMakePresets.json patched — armeabi-v7a presets added")
+          else:
+              print("CMakePresets.json already up-to-date, no patch needed")
+          PYEOF
 
       - name: Install dependencies
         run: |
