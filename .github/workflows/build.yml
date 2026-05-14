@@ -36,6 +36,7 @@ jobs:
       ANDROID_NDK_VERSION: "29.0.14206865"
 
     steps:
+      # 1. Checkout full Dusklight source (CMakePresets.json + C++ source)
       - name: Checkout Dusklight source
         uses: actions/checkout@v6
         with:
@@ -44,24 +45,26 @@ jobs:
           submodules: recursive
           path: source
 
+      # 2. Override platforms/android/ with our version (build.gradle, stage-jni-libs.sh)
       - name: Checkout Android platform (this repo)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           path: source/platforms/android
 
+      # 3. Patch CMakePresets.json — add armeabi-v7a presets missing from the main repo
       - name: Patch CMakePresets with armeabi-v7a support
         working-directory: source
         run: |
           python3 - << 'PYEOF'
-          import json, sys
+          import json
 
           with open('CMakePresets.json') as f:
               data = json.load(f)
 
-          cfg_names  = [p['name'] for p in data['configurePresets']]
-          bld_names  = [p['name'] for p in data['buildPresets']]
-          patched    = False
+          cfg_names = [p['name'] for p in data['configurePresets']]
+          bld_names = [p['name'] for p in data['buildPresets']]
+          patched   = False
 
           if 'android-armeabi-v7a' not in cfg_names:
               idx = next(i for i, p in enumerate(data['configurePresets'])
@@ -78,9 +81,9 @@ jobs:
               idx = next(i for i, p in enumerate(data['configurePresets'])
                          if p['name'] == 'x-android-ci-arm64')
               data['configurePresets'].insert(idx + 1, {
-                  "name":       "x-android-ci-armv7",
-                  "binaryDir":  "${sourceDir}/build/android-armv7",
-                  "inherits":   ["x-android-ci"],
+                  "name":      "x-android-ci-armv7",
+                  "binaryDir": "${sourceDir}/build/android-armv7",
+                  "inherits":  ["x-android-ci"],
                   "cacheVariables": {
                       "ANDROID_ABI":       "armeabi-v7a",
                       "Rust_CARGO_TARGET": "armv7-linux-androideabi"
@@ -112,10 +115,26 @@ jobs:
               with open('CMakePresets.json', 'w') as f:
                   json.dump(data, f, indent=2)
                   f.write('\n')
-              print("CMakePresets.json patched — armeabi-v7a presets added")
+              print("Patched CMakePresets.json with armeabi-v7a presets")
           else:
-              print("CMakePresets.json already up-to-date, no patch needed")
+              print("CMakePresets.json already up-to-date")
           PYEOF
+
+      # 4. Fix narrowing conversion in aurora/dds_io.cpp:
+      #    On armeabi-v7a size_t is 32-bit but expectedSize is uint64_t (64-bit).
+      #    C++11 list-initialisation rejects narrowing, so we add an explicit cast.
+      #    This patch is idempotent: a second run leaves the file unchanged.
+      - name: Patch aurora dds_io.cpp narrowing conversion (armeabi-v7a)
+        if: matrix.abi == 'armeabi-v7a'
+        working-directory: source
+        run: |
+          FILE="extern/aurora/lib/gfx/dds_io.cpp"
+          # Replace only the uncast form to avoid double-patching
+          sed -i \
+            's/ByteBuffer data{expectedSize};/ByteBuffer data{static_cast<size_t>(expectedSize)};/' \
+            "$FILE"
+          echo "Patch result:"
+          grep -n "ByteBuffer data{" "$FILE"
 
       - name: Install dependencies
         run: |
@@ -152,7 +171,7 @@ jobs:
 
       - name: Stage stripped JNI library
         working-directory: source
-        run: ANDROID_STAGE_ABIS="${{matrix.abi}}" bash platforms/android/scripts/stage-jni-libs.sh
+        run: ANDROID_STAGE_ABIS="${{matrix.abi}}" platforms/android/scripts/stage-jni-libs.sh
 
       - name: Build APK
         working-directory: source/platforms/android
