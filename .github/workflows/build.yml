@@ -36,10 +36,19 @@ jobs:
       ANDROID_NDK_VERSION: "29.0.14206865"
 
     steps:
+      # 1. Checkout this android-shell repo into platforms/android/
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          path: source/platforms/android
+
+      # 2. Checkout the full Dusklight source into source/
+      - uses: actions/checkout@v6
+        with:
+          repository: TwilitRealm/dusklight
+          fetch-depth: 0
           submodules: recursive
+          path: source
 
       - name: Install dependencies
         run: |
@@ -67,22 +76,23 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Configure CMake
-        working-directory: ../..
+        working-directory: source
         run: cmake --preset ${{matrix.preset}}
 
       - name: Build native library
-        working-directory: ../..
+        working-directory: source
         run: cmake --build --preset ${{matrix.preset}} --target dusklight
 
       - name: Stage stripped JNI library
-        working-directory: ../..
+        working-directory: source
         run: ANDROID_STAGE_ABIS="${{matrix.abi}}" platforms/android/scripts/stage-jni-libs.sh
 
       - name: Build APK
+        working-directory: source/platforms/android
         run: ./gradlew :app:assembleRelease --rerun-tasks
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: dusklight-android-${{matrix.artifact_arch}}
-          path: app/build/outputs/apk/release/app-${{matrix.abi}}-release-unsigned.apk
+          path: source/platforms/android/app/build/outputs/apk/release/app-${{matrix.abi}}-release-unsigned.apk
