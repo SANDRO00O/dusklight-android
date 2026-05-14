@@ -36,7 +36,6 @@ jobs:
       ANDROID_NDK_VERSION: "29.0.14206865"
 
     steps:
-      # Step 1: Checkout full Dusklight source (has CMakePresets.json + C++ source)
       - name: Checkout Dusklight source
         uses: actions/checkout@v6
         with:
@@ -45,15 +44,12 @@ jobs:
           submodules: recursive
           path: source
 
-      # Step 2: Checkout this android repo, overriding platforms/android/ with our version
-      # (our build.gradle has armeabi-v7a in splits, our stage-jni-libs.sh supports armeabi-v7a)
       - name: Checkout Android platform (this repo)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           path: source/platforms/android
 
-      # Step 3: Patch CMakePresets.json — add armeabi-v7a presets that the main repo lacks
       - name: Patch CMakePresets with armeabi-v7a support
         working-directory: source
         run: |
@@ -67,7 +63,6 @@ jobs:
           bld_names  = [p['name'] for p in data['buildPresets']]
           patched    = False
 
-          # ── configure: android-armeabi-v7a (local dev preset) ──────────────
           if 'android-armeabi-v7a' not in cfg_names:
               idx = next(i for i, p in enumerate(data['configurePresets'])
                          if p['name'] == 'android-x86_64')
@@ -79,7 +74,6 @@ jobs:
               })
               patched = True
 
-          # ── configure: x-android-ci-armv7 (CI preset) ─────────────────────
           if 'x-android-ci-armv7' not in cfg_names:
               idx = next(i for i, p in enumerate(data['configurePresets'])
                          if p['name'] == 'x-android-ci-arm64')
@@ -94,7 +88,6 @@ jobs:
               })
               patched = True
 
-          # ── build: android-armeabi-v7a ─────────────────────────────────────
           if 'android-armeabi-v7a' not in bld_names:
               idx = next(i for i, p in enumerate(data['buildPresets'])
                          if p['name'] == 'android-x86_64')
@@ -105,7 +98,6 @@ jobs:
               })
               patched = True
 
-          # ── build: x-android-ci-armv7 ─────────────────────────────────────
           if 'x-android-ci-armv7' not in bld_names:
               idx = next(i for i, p in enumerate(data['buildPresets'])
                          if p['name'] == 'x-android-ci-arm64')
@@ -160,7 +152,7 @@ jobs:
 
       - name: Stage stripped JNI library
         working-directory: source
-        run: ANDROID_STAGE_ABIS="${{matrix.abi}}" platforms/android/scripts/stage-jni-libs.sh
+        run: ANDROID_STAGE_ABIS="${{matrix.abi}}" bash platforms/android/scripts/stage-jni-libs.sh
 
       - name: Build APK
         working-directory: source/platforms/android
